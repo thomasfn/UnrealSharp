@@ -118,14 +118,14 @@ void FCSGenerator::GenerateGlueForType(UObject* Object, bool bForceExport)
 	
 	if (UClass* Class = Cast<UClass>(Object))
 	{
+		// Don't generate glue for templates
 		if (Class->HasAnyFlags(RF_ClassDefaultObject))
 		{
 			return;
 		}
-
-		// If it's a SKEL class, we don't want to export it - those are just temporary classes used to hold the skeleton definition
-		// of the blueprint class before it's compiled.
-		if (Class->HasAnyFlags(RF_Transient) && Class->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
+		
+		// Don't generate glue for classes that have been compiled from a blueprint
+		if (Class->HasAnyClassFlags(CLASS_CompiledFromBlueprint))
 		{
 			return;
 		}
@@ -608,6 +608,13 @@ FCSModule& FCSGenerator::FindOrRegisterModule(const UObject* Struct)
 
 void FCSGenerator::ExportInterface(UClass* Interface, FCSScriptBuilder& Builder)
 {
+	if (!ensure(!ExportedTypes.Contains(Interface)))
+	{
+		return;
+	}
+
+	ExportedTypes.Add(Interface);
+
 	FString InterfaceName = NameMapper.GetScriptClassName(Interface);
 	const FCSModule& BindingsModule = FindOrRegisterModule(Interface);
 	
