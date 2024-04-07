@@ -31,7 +31,7 @@ public class UnrealObjectDestroyedException : InvalidOperationException
     }
 }
 
-public class UnrealSharpObject() : IDisposable
+public class UnrealSharpObject : IDisposable
 {
     public IntPtr NativeObject { get; private set; }
     public Name ObjectName => IsDestroyed ? Name.None : UObjectExporter.CallNativeGetName(NativeObject);
@@ -40,14 +40,14 @@ public class UnrealSharpObject() : IDisposable
     internal static IntPtr Create(Type typeToCreate, IntPtr nativeObjectPtr)
     {
         UnrealSharpObject createdObject = (UnrealSharpObject) RuntimeHelpers.GetUninitializedObject(typeToCreate);
-
+        
         const BindingFlags bindingFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
         var foundConstructor = typeToCreate.GetConstructor(bindingFlags, null, Type.EmptyTypes, null);
-
-        createdObject.NativeObject = nativeObjectPtr;
         
-        foundConstructor.Invoke(createdObject, null);
+        createdObject.NativeObject = nativeObjectPtr;
 
+        foundConstructor.Invoke(createdObject, null);
+        
         return GCHandle.ToIntPtr(GcHandleUtilities.AllocateStrongPointer(createdObject));
     }
 
@@ -155,28 +155,28 @@ public class UnrealSharpObject() : IDisposable
         return SpawnActor(spawnTransform, actorType, spawnParameters);
     }
     
-    public T GetWorldSubsystem<T>() where T : CSWorldSubsystem
+    public T GetWorldSubsystem<T>() where T : WorldSubsystem
     {
         var subsystemClass = new SubclassOf<T>(typeof(T));
         IntPtr handle = UWorldExporter.CallGetWorldSubsystem(subsystemClass.NativeClass, NativeObject);
         return GcHandleUtilities.GetObjectFromHandlePtr<T>(handle);
     }
     
-    public T GetGameInstanceSubsystem<T>() where T : CSGameInstanceSubsystem
+    public T GetGameInstanceSubsystem<T>() where T : GameInstanceSubsystem
     {
         var subsystemClass = new SubclassOf<T>(typeof(T));
         IntPtr handle = UGameInstanceExporter.CallGetGameInstanceSubsystem(subsystemClass.NativeClass, NativeObject);
         return GcHandleUtilities.GetObjectFromHandlePtr<T>(handle);
     }
     
-    public static T GetEditorSubsystem<T>() where T : CSEditorSubsystem
+    public static T GetEditorSubsystem<T>() where T : EditorSubsystem.EditorSubsystem
     {
         var subsystemClass = new SubclassOf<T>(typeof(T));
         IntPtr handle = GEditorExporter.CallGetEditorSubsystem(subsystemClass.NativeClass);
         return GcHandleUtilities.GetObjectFromHandlePtr<T>(handle);
     }
     
-    public T GetEngineSubsystem<T>() where T : CSEngineSubsystem
+    public T GetEngineSubsystem<T>() where T : EngineSubsystem
     {
         var subsystemClass = new SubclassOf<T>(typeof(T));
         IntPtr handle = GEngineExporter.CallGetEngineSubsystem(subsystemClass.NativeClass);
