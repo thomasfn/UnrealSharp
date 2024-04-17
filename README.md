@@ -9,7 +9,8 @@ UnrealSharp is a plugin for Unreal Engine 5 that allows game developers to use C
 - **C# Integration**: Write your game logic in C#.
 - **Seamless Unreal Engine 5 Compatibility**: Fully integrated with the latest UE5 features and API.
 - **Hot reload:** Compile and reload code on the fly without having to restart the engine for changes.
-- **Automatic Bindings:** Automatically generates C# API based on what is exposed to Blueprint. Which enables marketplace code plugins a seamless integration with UnrealSharp.
+- **Automatic Bindings:** Automatically generates C# API based on what is exposed to reflection.
+- **.NET Ecosystem:** Use any NuGet package to extend functionality.
 
 ## Prerequisites
 - Unreal Engine 5.3.+ (Will support earlier versions in the future)
@@ -30,7 +31,7 @@ using UnrealSharp.Attributes;
 using UnrealSharp.Engine;
 using UnrealSharp.Niagara;
 
-namespace ManagedCropoutSampleProject;
+namespace ManagedSharpProject;
 
 public partial class OnIsPickedUpDelegate : MulticastDelegate<OnIsPickedUpDelegate.Signature>
 {
@@ -38,7 +39,9 @@ public partial class OnIsPickedUpDelegate : MulticastDelegate<OnIsPickedUpDelega
 }
 
 [UClass]
-public class ResourceBase : Actor, IInteractable
+// Partial classes are only a requirement if you want UnrealSharp to generate helper methods.
+// Such as: MyCustomComponent foundComponent = MyCustomComponent.Get(actorReference);
+public partial class ResourceBase : Actor, IInteractable
 {
     public ResourceBase()
     {
@@ -53,6 +56,9 @@ public class ResourceBase : Actor, IInteractable
     // The health component of the resource, if it has one
     [UProperty(DefaultComponent = true)]
     public HealthComponent HealthComponent { get; set; }
+    
+    [UProperty(PropertyFlags.EditDefaultsOnly)]
+    public int PickUpAmount { get; set; }
     
     // The time it takes for the resource to respawn
     [UProperty(PropertyFlags.EditDefaultsOnly | PropertyFlags.BlueprintReadOnly)]
@@ -75,7 +81,7 @@ public class ResourceBase : Actor, IInteractable
         HealthComponent.OnDeath += OnDeath;
         base.ReceiveBeginPlay();
     }
-    
+
     [UFunction]
     protected virtual void OnDeath(Player player) {}
 
@@ -92,8 +98,15 @@ public class ResourceBase : Actor, IInteractable
         {
             return;
         }
-        
-        player.Inventory.AddItem(this);
+
+        if (!player.Inventory.AddItem(this, PickUpAmount))
+        {
+            return;
+        }
+
+        // Get the ExperienceComponent from the PlayerState using the generated helper methods.
+        ExperienceComponent experienceComponent = ExperienceComponent.Get(player.PlayerState);
+        experienceComponent.AddExperience(PickUpAmount);
         
         // Respawn the resource after a certain amount of time
         SetTimer(OnRespawned, RespawnTime, false);
@@ -113,7 +126,7 @@ public class ResourceBase : Actor, IInteractable
     [UFunction]
     public void OnRep_IsPickedUp()
     {
-        if (PickUpEffect != null)
+        if (PickUpEffect is not null)
         {
             NiagaraFunctionLibrary.SpawnSystemAtLocation(this, PickUpEffect, GetActorLocation(), GetActorRotation());
         }

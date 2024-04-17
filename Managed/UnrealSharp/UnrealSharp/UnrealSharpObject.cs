@@ -137,11 +137,11 @@ public class UnrealSharpObject : IDisposable
         return GcHandleUtilities.GetObjectFromHandlePtr<T>(handle);
     }
     
-    public T SpawnActor<T>(Transform spawnTransform, 
-        SubclassOf<T> actorType, 
-        SpawnActorCollisionHandlingMethod spawnMethod = SpawnActorCollisionHandlingMethod.Default, 
-        UnrealSharpObject? instigator = null, 
-        UnrealSharpObject? owner = null) where T : Actor
+    public T SpawnActor<T>(SubclassOf<T> actorType = default, 
+        Transform spawnTransform = default,
+        ESpawnActorCollisionHandlingMethod spawnMethod = ESpawnActorCollisionHandlingMethod.Undefined, 
+        Pawn? instigator = null, 
+        Actor? owner = null) where T : Actor
     {
         ActorSpawnParameters actorSpawnParameters = new ActorSpawnParameters
         {

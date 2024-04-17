@@ -36,6 +36,23 @@ void FPropertyTranslator::AddReferences(const FProperty* Property, TSet<UField*>
 
 }
 
+void FPropertyTranslator::ExportDelegateReferences(const FProperty* Property) const
+{
+	TSet<UFunction*> DelegateSignatures;
+	AddDelegateReferences(Property, DelegateSignatures);
+
+	FCSGenerator& Generator = FCSGenerator::Get();
+	for (UFunction* DelegateSignature : DelegateSignatures)
+	{
+		Generator.GenerateGlueForDelegate(DelegateSignature, true);
+	}
+}
+
+void FPropertyTranslator::AddDelegateReferences(const FProperty* Property, TSet<UFunction*>& DelegateSignatures) const
+{
+
+}
+
 FString FPropertyTranslator::GetCSharpFixedSizeArrayType(const FProperty *Property) const
 {
 	FString ArrayType;
@@ -62,7 +79,7 @@ void FPropertyTranslator::ExportWrapperProperty(FCSScriptBuilder& Builder, const
 
 	Builder.AppendLine(FString::Printf(TEXT("// %s"), *Property->GetFullName()));
 	ExportPropertyVariables(Builder, Property, NativePropertyName);
-
+	
 	if (!IsGreylisted)
 	{
 		BeginWrapperPropertyAccessorBlock(Builder, Property, CSharpPropertyName);
@@ -101,6 +118,7 @@ void FPropertyTranslator::ExportWrapperProperty(FCSScriptBuilder& Builder, const
 	}
 
 	ExportReferences(Property);
+	ExportDelegateReferences(Property);
 	OnPropertyExported(Builder, Property, NativePropertyName);
 	Builder.AppendLine();
 
@@ -121,6 +139,7 @@ void FPropertyTranslator::BeginWrapperPropertyAccessorBlock(FCSScriptBuilder& Bu
 	GetPropertyProtection(Property, Protection);
 	
 	Builder.AppendLine();
+	AppendTooltip(Property, Builder);
 	const FString PropertyType = Property->ArrayDim == 1 ? GetManagedType(Property) : GetCSharpFixedSizeArrayType(Property);
 	Builder.AppendLine(FString::Printf(TEXT("%s%s %s"), GetData(Protection), *PropertyType, *CSharpPropertyName));
 	Builder.OpenBrace();
@@ -137,6 +156,7 @@ void FPropertyTranslator::ExportMirrorProperty(FCSScriptBuilder& Builder, const 
 	FString NativePropertyName = Property->GetName();
 
 	Builder.AppendLine(FString::Printf(TEXT("// %s"), *Property->GetFullName()));
+	Builder.AppendLine();
 
 	if (!bSuppressOffsets)
 	{
@@ -147,7 +167,8 @@ void FPropertyTranslator::ExportMirrorProperty(FCSScriptBuilder& Builder, const 
 	{
 		FString Protection;
 		GetPropertyProtection(Property, Protection);
-		
+
+		AppendTooltip(Property, Builder);
 		if (IsSetterRequired())
 		{
 			Builder.AppendLine(FString::Printf(TEXT("%s%s %s;"), GetData(Protection), *GetManagedType(Property), *CSharpPropertyName));
@@ -159,6 +180,7 @@ void FPropertyTranslator::ExportMirrorProperty(FCSScriptBuilder& Builder, const 
 	}
 
 	ExportReferences(Property);
+	ExportDelegateReferences(Property);
 	Builder.AppendLine();
 }
 
@@ -414,6 +436,7 @@ void FPropertyTranslator::FunctionExporter::Initialize(ProtectionMode InProtecti
 		}
 
 		ParamHandler.ExportReferences(Parameter);
+		ParamHandler.ExportDelegateReferences(Parameter);
 		ParamsProcessed++;
 	}
 
@@ -459,6 +482,7 @@ void FPropertyTranslator::FunctionExporter::ExportOverloads(FCSScriptBuilder& Bu
 	for (const FunctionOverload& Overload : Overloads)
 	{
 		Builder.AppendLine();
+		AppendTooltip(&Function, Builder);
 		ExportDeprecation(Builder);
 		Builder.AppendLine(FString::Printf(TEXT("%s%s %s(%s)"), *Modifiers, *Handler.GetManagedType(ReturnProperty), *CSharpMethodName, *Overload.ParamsStringAPIWithDefaults));
 		Builder.OpenBrace();
@@ -468,7 +492,7 @@ void FPropertyTranslator::FunctionExporter::ExportOverloads(FCSScriptBuilder& Bu
 		Overload.ParamHandler->ExportCppDefaultParameterAsLocalVariable(Builder, *Overload.CSharpParamName, Overload.CppDefaultValue, &Function, Overload.ParamProperty);
 		Builder.AppendLine(FString::Printf(TEXT("%s%s(%s);"), *ReturnStatement, *CSharpMethodName, *Overload.ParamsStringCall));
 
-		Builder.CloseBrace(); // Overloaded function
+		Builder.CloseBrace();
 	}
 }
 
@@ -476,6 +500,7 @@ void FPropertyTranslator::FunctionExporter::ExportFunction(FCSScriptBuilder& Bui
 {
 	Builder.AppendLine();
 	ExportDeprecation(Builder);
+	AppendTooltip(&Function, Builder);
 	
 	if (bBlueprintEvent)
 	{
@@ -853,6 +878,30 @@ void FPropertyTranslator::ExportOverridableFunction(FCSScriptBuilder& Builder, U
 	Builder.AppendLine();
 }
 
+void FPropertyTranslator::ExportDelegateFunction(FCSScriptBuilder& Builder, UFunction* SignatureFunction) const
+{
+	FPropertyTranslator::FunctionExporter Exporter(*this, *SignatureFunction, FPropertyTranslator::ProtectionMode::OverrideWithProtected, FPropertyTranslator::OverloadMode::SuppressOverloads, FPropertyTranslator::BlueprintVisibility::Call);
+
+	FProperty* ReturnProperty = SignatureFunction->GetReturnProperty();
+	const FString ReturnType = *GetManagedType(ReturnProperty);
+
+	// Write signature delegate
+	Builder.AppendLine(FString::Printf(TEXT("public delegate %s Signature(%s);"), *ReturnType, *Exporter.ParamsStringAPIWithDefaults));
+	Builder.AppendLine();
+
+	// Write fields needed for native invoker
+	Exporter.ExportFunctionVariables(Builder);
+	Builder.AppendLine();
+
+	// Write native invoker
+	Builder.AppendLine(FString::Printf(TEXT("protected %s Invoker(%s)"), *ReturnType, *Exporter.ParamsStringAPIWithDefaults));
+	Builder.OpenBrace();
+	Builder.BeginUnsafeBlock();
+	Exporter.ExportInvoke(Builder, FPropertyTranslator::FunctionExporter::InvokeMode::Normal);
+	Builder.EndUnsafeBlock();
+	Builder.CloseBrace();
+}
+
 void FPropertyTranslator::AddNativePropertyField(FCSScriptBuilder& Builder, const FString& PropertyName)
 {
 	Builder.AppendLine(FString::Printf(TEXT("static IntPtr %s;"), *GetNativePropertyField(PropertyName)));
@@ -866,8 +915,8 @@ FString FPropertyTranslator::GetNativePropertyField(const FString& PropertyName)
 void FPropertyTranslator::ExportInterfaceFunction(FCSScriptBuilder& Builder, UFunction* Function) const
 {
 	FunctionExporter Exporter(*this, *Function);
-	Exporter.ExportSignature(Builder, "public ");
-	Builder.Append(";");
+	Exporter.ExportSignature(Builder, TEXT("public "));
+	Builder.Append(TEXT(";"));
 }
 
 void FPropertyTranslator::ExportPropertyVariables(FCSScriptBuilder& Builder, const FProperty* Property, const FString& NativePropertyName) const

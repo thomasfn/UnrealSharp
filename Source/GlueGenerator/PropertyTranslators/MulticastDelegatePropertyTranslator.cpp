@@ -15,37 +15,64 @@ bool FMulticastDelegatePropertyTranslator::CanHandleProperty(const FProperty* Pr
 	return true;
 }
 
-FString FMulticastDelegatePropertyTranslator::GetManagedType(const FProperty* Property) const
+void FMulticastDelegatePropertyTranslator::AddDelegateReferences(const FProperty* Property, TSet<UFunction*>& DelegateSignatures) const
 {
-	return Property->GetName();
+	const FMulticastDelegateProperty* DelegateProperty = CastField<FMulticastDelegateProperty>(Property);
+	DelegateSignatures.Add(DelegateProperty->SignatureFunction);
 }
 
+FString FMulticastDelegatePropertyTranslator::GetManagedType(const FProperty* Property) const
+{
+	return GetDelegateName(CastFieldChecked<FMulticastDelegateProperty>(Property));
+}
 
+void FMulticastDelegatePropertyTranslator::ExportPropertyStaticConstruction(FCSScriptBuilder& Builder, const FProperty* Property, const FString& NativePropertyName) const
+{
+	FDelegateBasePropertyTranslator::ExportPropertyStaticConstruction(Builder, Property, NativePropertyName);
+
+	const FMulticastDelegateProperty* DelegateProperty = CastFieldChecked<FMulticastDelegateProperty>(Property);
+
+	if (DelegateProperty->SignatureFunction->NumParms > 0)
+	{
+		FString DelegateName = GetDelegateName(DelegateProperty);
+		Builder.AppendLine(FString::Printf(TEXT("%s.InitializeUnrealDelegate(%s_NativeProperty);"), *DelegateName, *NativePropertyName));
+	}
+}
 
 void FMulticastDelegatePropertyTranslator::ExportPropertyVariables(FCSScriptBuilder& Builder, const FProperty* Property, const FString& PropertyName) const
 {
 	AddNativePropertyField(Builder, PropertyName);
 
 	FString BackingFieldName = GetBackingFieldName(Property);
-	Builder.AppendLine(FString::Printf(TEXT("private %s %s;"), *PropertyName, *BackingFieldName));
+	FString DelegateName = GetDelegateName(CastFieldChecked<FMulticastDelegateProperty>(Property));
+	Builder.AppendLine(FString::Printf(TEXT("private %s %s;"), *DelegateName, *BackingFieldName));
 	
 	FPropertyTranslator::ExportPropertyVariables(Builder, Property, PropertyName);
 }
 
 void FMulticastDelegatePropertyTranslator::ExportPropertySetter(FCSScriptBuilder& Builder, const FProperty* Property, const FString& PropertyName) const
 {
-	Builder.AppendLine(FString::Printf(TEXT("DelegateMarshaller<%s>.ToNative(IntPtr.Add(NativeObject,%s_Offset),0,this,value);"), *PropertyName, *PropertyName));
+	FString BackingFieldName = GetBackingFieldName(Property);
+	FString DelegateName = GetDelegateName(CastFieldChecked<FMulticastDelegateProperty>(Property));
+
+	Builder.AppendLine(FString::Printf(TEXT("if (value == %s)"), *BackingFieldName));
+	Builder.OpenBrace();
+	Builder.AppendLine("return;");
+	Builder.CloseBrace();
+	Builder.AppendLine(FString::Printf(TEXT("%s = value;"), *BackingFieldName));
+	Builder.AppendLine(FString::Printf(TEXT("DelegateMarshaller<%s>.ToNative(IntPtr.Add(NativeObject,%s_Offset),0,this,value);"), *DelegateName, *PropertyName));
 }
 
 void FMulticastDelegatePropertyTranslator::ExportPropertyGetter(FCSScriptBuilder& Builder, const FProperty* Property, const FString& PropertyName) const
 {
 	FString BackingFieldName = GetBackingFieldName(Property);
 	FString NativePropertyFieldName = GetNativePropertyField(PropertyName);
+	FString DelegateName = GetDelegateName(CastFieldChecked<FMulticastDelegateProperty>(Property));
 	
 	Builder.AppendLine(FString::Printf(TEXT("if (%s == null)"), *BackingFieldName));
 	Builder.OpenBrace();
 	Builder.AppendLine(FString::Printf(TEXT("%s = DelegateMarshaller<%s>.FromNative(IntPtr.Add(NativeObject, %s_Offset), %s, 0, this);"),
-		*BackingFieldName, GetData(PropertyName), GetData(PropertyName), *NativePropertyFieldName));
+		*BackingFieldName, GetData(DelegateName), GetData(PropertyName), *NativePropertyFieldName));
 	Builder.CloseBrace();
 	Builder.AppendLine(FString::Printf(TEXT("return %s;"), *BackingFieldName));
 }
@@ -55,53 +82,13 @@ FString FMulticastDelegatePropertyTranslator::GetNullReturnCSharpValue(const FPr
 	return "null";
 }
 
-void FMulticastDelegatePropertyTranslator::OnPropertyExported(FCSScriptBuilder& Builder, const FProperty* Property, const FString& PropertyName) const
-{
-	FCSModule& Module = FCSGenerator::Get().FindOrRegisterModule(Property->GetOutermost());
-	const FMulticastDelegateProperty* DelegateProperty = CastFieldChecked<FMulticastDelegateProperty>(Property);
-	UFunction* Function = DelegateProperty->SignatureFunction;
-	
-	FCSScriptBuilder DelegateBuilder(FCSScriptBuilder::IndentType::Spaces);
-
-	DelegateBuilder.GenerateScriptSkeleton(Module.GetNamespace());
-	DelegateBuilder.AppendLine();
-
-	FString SignatureName = FString::Printf(TEXT("%s.Signature"), *PropertyName);
-	FString SuperClass = FString::Printf(TEXT("MulticastDelegate<%s>"), *SignatureName);
-	
-	DelegateBuilder.DeclareType("class", PropertyName, SuperClass, true);
-	
-	FunctionExporter Exporter(*this, *Function, ProtectionMode::UseUFunctionProtection, OverloadMode::SuppressOverloads, BlueprintVisibility::Call);
-
-	// Write signature delegate
-	DelegateBuilder.AppendLine(FString::Printf(TEXT("public delegate void Signature(%s);"), *Exporter.ParamsStringAPIWithDefaults));
-	DelegateBuilder.AppendLine();
-
-	// Write fields needed for native invoker
-	Exporter.ExportFunctionVariables(DelegateBuilder);
-	DelegateBuilder.AppendLine();
-
-	// Write native invoker
-	DelegateBuilder.AppendLine(FString::Printf(TEXT("protected void Invoker(%s)"), *Exporter.ParamsStringAPIWithDefaults));
-	DelegateBuilder.OpenBrace();
-	DelegateBuilder.BeginUnsafeBlock();
-	Exporter.ExportInvoke(DelegateBuilder, FunctionExporter::InvokeMode::Normal);
-	DelegateBuilder.EndUnsafeBlock();
-	DelegateBuilder.CloseBrace();
-
-	// Write delegate initializer
-	DelegateBuilder.AppendLine("static public void InitializeUnrealDelegate(IntPtr nativeDelegateProperty)");
-	DelegateBuilder.OpenBrace();
-	FCSGenerator::Get().ExportDelegateFunctionStaticConstruction(DelegateBuilder, Function);
-	DelegateBuilder.CloseBrace();
-	
-	DelegateBuilder.CloseBrace();
-	
-	FString FileName = FString::Printf(TEXT("%s.generated.cs"), *PropertyName);
-	FCSGenerator::Get().SaveGlue(&Module, FileName, DelegateBuilder.ToString());
-}
-
 FString FMulticastDelegatePropertyTranslator::GetBackingFieldName(const FProperty* Property)
 {
 	return FString::Printf(TEXT("%s_BackingField"), *Property->GetName());
+}
+
+FString FMulticastDelegatePropertyTranslator::GetDelegateName(const FMulticastDelegateProperty* Property)
+{
+	const UFunction* Function = Property->SignatureFunction;
+	return FDelegateBasePropertyTranslator::GetDelegateName(Function);
 }

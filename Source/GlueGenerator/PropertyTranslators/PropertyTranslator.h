@@ -1,7 +1,7 @@
 #pragma once
 
-#include "CSSupportedPropertyTranslators.h"
 #include "GlueGenerator/CSNameMapper.h"
+#include "GlueGenerator/CSPropertyTranslatorManager.h"
 
 static const FName MD_DeprecatedFunction(TEXT("DeprecatedFunction"));
 static const FName MD_DeprecationMessage(TEXT("DeprecationMessage"));
@@ -12,7 +12,7 @@ class FPropertyTranslator
 public:
 	virtual ~FPropertyTranslator() = default;
 
-	FPropertyTranslator(FCSSupportedPropertyTranslators& InPropertyHandlers, EPropertyUsage InPropertyUsage)
+	FPropertyTranslator(FCSPropertyTranslatorManager& InPropertyHandlers, EPropertyUsage InPropertyUsage)
 	: PropertyHandlers(InPropertyHandlers)
 	, SupportedPropertyUsage(InPropertyUsage)
 	{
@@ -26,6 +26,8 @@ public:
 	// Subclasses may override to specify any additional classes that must be exported to handle a property.
 	void ExportReferences(const FProperty* Property) const;
 	virtual void AddReferences(const FProperty* Property, TSet<UField*>& References) const;
+	void ExportDelegateReferences(const FProperty* Property) const;
+	virtual void AddDelegateReferences(const FProperty* Property, TSet<UFunction*>& DelegateSignatures) const;
 
 	virtual FString GetManagedType(const FProperty* Property) const = 0;
 	virtual FString GetCSharpFixedSizeArrayType(const FProperty* Property) const;
@@ -66,6 +68,7 @@ public:
 	void ExportFunction(FCSScriptBuilder& Builder, UFunction* Function, FunctionType FuncType) const;
 	void ExportInterfaceFunction(FCSScriptBuilder& Builder, UFunction* Function) const;
 	void ExportOverridableFunction(FCSScriptBuilder& Builder, UFunction* Function) const;
+	void ExportDelegateFunction(FCSScriptBuilder& Builder, UFunction* SignatureFunction) const;
 
 	static void AddNativePropertyField(FCSScriptBuilder& Builder, const FString& PropertyName);
 	static FString GetNativePropertyField(const FString& PropertyName);
@@ -191,7 +194,7 @@ protected:
 	// Subclasses must override when CanExportDefaultParameter() can return false.
 	virtual void ExportCppDefaultParameterAsLocalVariable(FCSScriptBuilder& Builder, const FString& VariableName, const FString& CppDefaultValue, UFunction* Function, FProperty* ParamProperty) const;
 
-	FCSSupportedPropertyTranslators& PropertyHandlers;
+	FCSPropertyTranslatorManager& PropertyHandlers;
 
 private:
 	// Returns the default value for a parameter property, or an empty string if no default is defined.
