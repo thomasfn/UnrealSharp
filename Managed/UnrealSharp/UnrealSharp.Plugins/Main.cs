@@ -1,212 +1,75 @@
-﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Loader;
-using UnrealSharp.Interop;
+using System.Text;
+using UnrealSharp.Binds;
+using UnrealSharp.Core;
 
 namespace UnrealSharp.Plugins;
 
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PluginsCallbacks
+internal unsafe struct FCSInitializationResult
 {
-    public delegate* unmanaged<char*, IntPtr> LoadPlugin;
-    public delegate* unmanaged<char*, NativeBool> UnloadPlugin;
+    public const int MessageCapacity = 4096;
+    public NativeBool Success;
+    public fixed byte Message[MessageCapacity];
 }
 
-public static class Main
+internal static class Main
 {
-    private static readonly Assembly CoreApiAssembly = typeof(UnrealSharpObject).Assembly;
-    private static readonly List<PluginLoadContextWrapper> LoadedPlugins = [];
-    private static readonly List<AssemblyName> SharedAssemblies = [];
-    private static readonly AssemblyLoadContext MainLoadContext = AssemblyLoadContext.GetLoadContext(Assembly.GetExecutingAssembly()) ?? AssemblyLoadContext.Default;
-    private static DllImportResolver? _dllImportResolver;
-    
-    private sealed class PluginLoadContextWrapper
-    {
-        private PluginLoadContext? _pluginLoadContext;
-
-        private PluginLoadContextWrapper(PluginLoadContext pluginLoadContext, Assembly assembly)
-        {
-            _pluginLoadContext = pluginLoadContext;
-            Assembly = new WeakReference<Assembly>(assembly);
-        }
-
-        public string? AssemblyLoadedPath => _pluginLoadContext?.AssemblyLoadedPath;
-        public bool IsCollectible => _pluginLoadContext?.IsCollectible ?? true;
-        public bool IsAlive => _pluginLoadContext != null;
-        
-        // Be careful using this. Any hard reference at the wrong time will prevent the plugin from being unloaded.
-        // Thus breaking hot reloading.
-        public WeakReference<Assembly> Assembly { get; }
-
-        public static (Assembly, PluginLoadContextWrapper) CreateAndLoadFromAssemblyName(AssemblyName assemblyName, string pluginPath, ICollection<string> sharedAssemblies, AssemblyLoadContext mainLoadContext, bool isCollectible)
-        {
-            var context = new PluginLoadContext(pluginPath, sharedAssemblies, mainLoadContext, isCollectible);
-            var assembly = context.LoadFromAssemblyName(assemblyName);
-            var wrapper = new PluginLoadContextWrapper(context, assembly);
-            return (assembly, wrapper);
-        }
-        
-        internal void Unload()
-        {
-            _pluginLoadContext?.Unload();
-            _pluginLoadContext = null;
-        }
-    }
-
     [UnmanagedCallersOnly]
-    private static unsafe NativeBool InitializeUnrealSharp(IntPtr assemblyPath, PluginsCallbacks* pluginCallbacks, ManagedCallbacks* managedCallbacks, IntPtr exportFunctionsPtr)
+    private static unsafe void InitializeUnrealSharp(
+        byte* workingDirectoryUtf8,
+        PluginsCallbacks* pluginCallbacks,
+        nint bindsCallbacks,
+        nint managedCallbacks,
+        FCSInitializationResult* result)
     {
         try
         {
-            AlcReloadCfg.Configure(true);
-            
-            SetupDllImportResolver(assemblyPath);
+            AppDomain.CurrentDomain.SetData("APP_CONTEXT_BASE_DIRECTORY",
+                Marshal.PtrToStringUTF8((nint)workingDirectoryUtf8)!);
 
-            // Initialize plugin and managed callbacks
-            *pluginCallbacks = new PluginsCallbacks
-            {
-                LoadPlugin = &LoadUserAssembly,
-                UnloadPlugin = &UnloadProjectPlugin,
-            };
-                
-            // Initialize exported functions
-            ExportedFunctionsManager.Initialize(exportFunctionsPtr);
+#if WITH_EDITOR
+            TryRegisterMSBuild();
+#endif
 
-            // Initialize managed callbacks
-            *managedCallbacks = ManagedCallbacks.Create();
-
-            Console.WriteLine("UnrealSharp successfully setup!");
-            return NativeBool.True;
+            PluginsCallbacks.Initialize(pluginCallbacks);
+            ManagedCallbacks.Initialize(managedCallbacks);
+            NativeBinds.Initialize(bindsCallbacks);
+            result->Success = NativeBool.True;
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            Console.WriteLine($"Error initializing C# from Engine: {ex.Message}");
-            return NativeBool.False;
+            result->Success = NativeBool.False;
+            WriteMessage((nint)result->Message, exception.ToString());
         }
     }
 
-    [UnmanagedCallersOnly]
-    private static unsafe IntPtr LoadUserAssembly(char* assemblyPath)
+    private static void WriteMessage(nint buffer, string message)
     {
-        try
-        {
-            return LoadPlugin(new string(assemblyPath), true);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"An error occurred while loading the plugin: {ex.Message}");
-        }
-        return default;
+        byte[] bytes = Encoding.UTF8.GetBytes(message);
+        int length = Math.Min(bytes.Length, FCSInitializationResult.MessageCapacity - 1);
+        Marshal.Copy(bytes, 0, buffer, length);
+        Marshal.WriteByte(buffer, length, 0);
     }
-    
-    private static void SetupDllImportResolver(IntPtr assemblyPathPtr)
+
+#if WITH_EDITOR
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void TryRegisterMSBuild()
     {
-        _dllImportResolver = new UnrealSharpDllImportResolver(assemblyPathPtr).OnResolveDllImport;
-        SharedAssemblies.Add(CoreApiAssembly.GetName());
-        NativeLibrary.SetDllImportResolver(CoreApiAssembly, _dllImportResolver);
-    }
-    
-    private static IntPtr LoadPlugin(string assemblyPath, bool isCollectible)
-    {
-        string assemblyName = Path.GetFileNameWithoutExtension(assemblyPath);
-        
-        var sharedAssemblies = new List<string>();
-        foreach (var sharedAssembly in SharedAssemblies)
-        {
-            string? sharedAssemblyName = sharedAssembly.Name;
-            if (sharedAssemblyName != null)
-            {
-                sharedAssemblies.Add(sharedAssemblyName);
+        var instance = Microsoft.Build.Locator.MSBuildLocator
+            .QueryVisualStudioInstances()
+            .OrderByDescending(i => i.Version)
+            .FirstOrDefault();
 
-            }
-        }
-        
-        var (loadedAssembly, newPlugin) = PluginLoadContextWrapper.CreateAndLoadFromAssemblyName(new AssemblyName(assemblyName), assemblyPath, sharedAssemblies, MainLoadContext, isCollectible);
-
-        if (!newPlugin.IsAlive)
+        if (instance != null)
         {
-            throw new Exception($"Failed to load plugin from: {assemblyPath}");
+            Microsoft.Build.Locator.MSBuildLocator.RegisterInstance(instance);
         }
-        
-        LoadedPlugins.Add(newPlugin);
-        Console.WriteLine($"Successfully loaded plugin: {assemblyName}");
-        return GCHandle.ToIntPtr(GcHandleUtilities.AllocateWeakPointer(loadedAssembly));
-    }
-    
-    [UnmanagedCallersOnly]
-    private static unsafe NativeBool UnloadProjectPlugin(char* assemblyPath)
-    {
-        try
+        else
         {
-            string assemblyPathStr = new string(assemblyPath);
-            
-            foreach (var plugin in LoadedPlugins)
-            {
-                if (plugin.AssemblyLoadedPath != assemblyPathStr)
-                {
-                    continue;
-                }
-                
-                return UnloadPlugin(plugin).ToNativeBool();
-            }
-            
-            throw new Exception($"Failed to find plugin to unload: {assemblyPathStr}");
-        }
-        catch (Exception e)
-        {
-            Console.Error.WriteLine(e);
-            return NativeBool.False;
+            Microsoft.Build.Locator.MSBuildLocator.RegisterDefaults();
         }
     }
-    
-    private static bool UnloadPlugin(PluginLoadContextWrapper pluginLoadContext)
-    {
-        try
-        {
-            if (!pluginLoadContext.IsCollectible)
-            {
-                throw new InvalidOperationException("Cannot unload a plugin that's not set to IsCollectible.");
-            }
-            
-            Console.WriteLine($"Unloading plugin (Path: {pluginLoadContext.AssemblyLoadedPath}");
-
-            pluginLoadContext.Unload();
-
-            int startTimeMs = Environment.TickCount;
-            bool takingTooLong = false;
-
-            while (pluginLoadContext.IsAlive)
-            {
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced);
-                GC.WaitForPendingFinalizers();
-
-                if (!pluginLoadContext.IsAlive)
-                {
-                    break;
-                }
-                
-                int elapsedTimeMs = Environment.TickCount - startTimeMs;
-
-                if (!takingTooLong && elapsedTimeMs >= 200)
-                {
-                    takingTooLong = true;
-                    Console.Error.WriteLine("Unloading assembly took longer than expected.");
-                }
-                else if (elapsedTimeMs >= 1000)
-                {
-                    Console.Error.WriteLine("Failed to unload assemblies. Possible causes: Strong GC handles, running threads, etc.");
-                    return false;
-                }
-            }
-
-            LoadedPlugins.Remove(pluginLoadContext);
-            Console.WriteLine("Plugin unloaded successfully!");
-            return true;
-        }
-        catch (Exception e)
-        {
-            Console.Error.WriteLine(e);
-            return false;
-        }
-    }
+#endif
 }

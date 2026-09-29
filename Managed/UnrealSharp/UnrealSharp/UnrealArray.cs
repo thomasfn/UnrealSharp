@@ -1,138 +1,120 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
+using UnrealSharp.Core;
+using UnrealSharp.Core.Marshallers;
 using UnrealSharp.Interop;
 
 namespace UnrealSharp;
 
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
-public struct UnmanagedArray
+public class UnrealArrayEnumerator<T>(UnrealArrayBase<T> array) : IEnumerator<T>
 {
-    public IntPtr Data;
-    public int ArrayNum;
-    public int ArrayMax;
-}
-
-class UnrealArrayEnumerator<T>(UnrealArrayBase<T> array) : IEnumerator<T>
-{
-    int Index = -1;
-
-    public T Current => array.Get(Index);
+    private int _index = -1;
+    public T Current => array.Get(_index);
+    
+    object? System.Collections.IEnumerator.Current => Current;
 
     public void Dispose()
     {
         
     }
-
-    object System.Collections.IEnumerator.Current => Current;
-
+    
     public bool MoveNext()
     {
-        ++Index;
-        return Index < array.Count;
+        ++_index;
+        return _index < array.Count;
     }
 
     public void Reset()
     {
-        Index = -1;
+        _index = -1;
     }
 }
 
-public abstract class UnrealArrayBase<T> : IEnumerable<T>
+public abstract unsafe class UnrealArrayBase<T> : IEnumerable<T>
 {
-    protected readonly UnrealSharpObject OwnerSharpObject;
-    readonly IntPtr NativeUnrealProperty;
-    readonly IntPtr NativeBuffer_;
-    protected MarshalingDelegates<T>.FromNative FromNative;
-    protected MarshalingDelegates<T>.ToNative ToNative;
+    protected readonly IntPtr NativeProperty;
+    protected MarshallingDelegates<T>.FromNative FromNative;
+    protected MarshallingDelegates<T>.ToNative ToNative;
+    
+    protected UnmanagedArray* NativeBuffer { get; }
 
-    [CLSCompliant(false)]
-    public UnrealArrayBase(UnrealSharpObject ownerSharpObject, IntPtr nativeUnrealProperty, IntPtr nativeBuffer, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative)
+    protected UnrealArrayBase(IntPtr nativeProperty, IntPtr nativeBuffer, MarshallingDelegates<T>.ToNative toNative, MarshallingDelegates<T>.FromNative fromNative)
     {
-        OwnerSharpObject = ownerSharpObject;
-        NativeUnrealProperty = nativeUnrealProperty;
-        NativeBuffer_ = nativeBuffer;
+        NativeProperty = nativeProperty;
+        NativeBuffer = (UnmanagedArray*) nativeBuffer;
         FromNative = fromNative;
         ToNative = toNative;
     }
 
-    private void CheckOwner(string message)
-    {
-        if (OwnerSharpObject == null || OwnerSharpObject.IsDestroyed)
-        {
-            throw new UnrealObjectDestroyedException(message);
-        }
-    }
+    /// <summary>
+    /// The number of elements in the array.
+    /// </summary>
+    public int Count => NativeBuffer->ArrayNum;
 
-    private IntPtr NativeBuffer
-    {
-        get
-        {
-            CheckOwner("Trying to access array on destroyed object of type " + OwnerSharpObject.GetType());
-            return NativeBuffer_;
-        }
-    }
+    /// <summary>
+    /// The native buffer that holds the array data.
+    /// </summary>
+    protected IntPtr NativeArrayBuffer => NativeBuffer->Data;
 
-    public int Count
-    {
-        get
-        {
-            unsafe
-            {
-                UnmanagedArray* nativeArray = (UnmanagedArray*) NativeBuffer.ToPointer();
-                return nativeArray->ArrayNum;
-            }
-        }
-    }
-
-    protected IntPtr NativeArrayBuffer
-    {
-        get
-        {
-            unsafe
-            {
-                UnmanagedArray* nativeArray = (UnmanagedArray*)NativeBuffer.ToPointer();
-                return nativeArray->Data;
-            }
-        }
-    }
-
+    /// <summary>
+    /// Clears the array.
+    /// </summary>
     protected void ClearInternal()
     {
-        CheckOwner("Trying to Clear on an array on a destroyed Unreal Object");
-        FArrayPropertyExporter.CallEmptyArray(NativeUnrealProperty, NativeBuffer);
+        Bind_FArrayProperty.CallEmptyArray(NativeProperty, NativeBuffer);
     }
 
+    /// <summary>
+    /// Adds an element to the array.
+    /// </summary>
     protected void AddInternal()
     {
-        CheckOwner("Trying to Add on an array on a destroyed Unreal Object");
-        FArrayPropertyExporter.CallAddToArray(NativeUnrealProperty, NativeBuffer);
+        Bind_FArrayProperty.CallAddToArray(NativeProperty, NativeBuffer);
     }
 
+    /// <summary>
+    /// Inserts an element into the array at the specified index.
+    /// </summary>
+    /// <param name="index"> The index to insert the element at. </param>
     protected void InsertInternal(int index)
     {
-        CheckOwner("Trying to Insert into an array on a destroyed Unreal Object");
-        FArrayPropertyExporter.CallInsertInArray(NativeUnrealProperty, NativeBuffer, index);
+        Bind_FArrayProperty.CallInsertInArray(NativeProperty, NativeBuffer, index);
     }
 
+    /// <summary>
+    /// Removes an element from the array at the specified index.
+    /// </summary>
+    /// <param name="index"> The index to remove the element at. </param>
     protected void RemoveAtInternal(int index)
     {
-        CheckOwner("Trying to RemoveAt on an array on a destroyed Unreal Object");
-        FArrayPropertyExporter.CallRemoveFromArray(NativeUnrealProperty, NativeBuffer, index);
+        Bind_FArrayProperty.CallRemoveFromArray(NativeProperty, NativeBuffer, index);
     }
 
+    /// <summary>
+    /// Gets the element at the specified index.
+    /// </summary>
+    /// <param name="index"> The index of the element to get. </param>
+    /// <returns> The element at the specified index. </returns>
+    /// <exception cref="IndexOutOfRangeException"> Thrown if the index is out of bounds. </exception>
     public T Get(int index)
     {
         if (index < 0 || index >= Count)
         {
-            throw new IndexOutOfRangeException(string.Format("Index {0} out of bounds. Array is size {1}", index, Count));
+            throw new IndexOutOfRangeException($"Index {index} out of bounds. Array is size {Count}");
         }
-        return FromNative(NativeArrayBuffer, index, OwnerSharpObject);
+        
+        return FromNative(NativeArrayBuffer, index);
     }
 
+    /// <summary>
+    /// Does the array contain the specified element?
+    /// </summary>
+    /// <param name="item"> The element to check for. </param>
+    /// <returns> True if the element is in the array, false otherwise. </returns>
     public bool Contains(T item)
     {
         foreach (T element in this)
         {
-            if (element.Equals(item))
+            if (EqualityComparer<T>.Default.Equals(element, item))
             {
                 return true;
             }
@@ -140,6 +122,10 @@ public abstract class UnrealArrayBase<T> : IEnumerable<T>
         return false;
     }
 
+    /// <summary>
+    /// Gets the enumerator for the array.
+    /// </summary>
+    /// <returns> The enumerator for the array. </returns>
     public IEnumerator<T> GetEnumerator()
     {
         return new UnrealArrayEnumerator<T>(this);
@@ -151,220 +137,62 @@ public abstract class UnrealArrayBase<T> : IEnumerable<T>
     }
 }
 
-public class UnrealArrayReadOnly<T> : UnrealArrayBase<T>, IReadOnlyList<T>
+public class ArrayCopyMarshaller<T>
 {
-    [CLSCompliant(false)]
-    public UnrealArrayReadOnly(UnrealSharpObject baseSharpObject, IntPtr nativeUnrealProperty, IntPtr nativeBuffer, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative)
-        : base(baseSharpObject, nativeUnrealProperty, nativeBuffer, toNative, fromNative)
+    private readonly IntPtr _nativeProperty;
+    private readonly MarshallingDelegates<T>.ToNative _innerTypeToNative;
+    private readonly MarshallingDelegates<T>.FromNative _innerTypeFromNative;
+
+    public ArrayCopyMarshaller(IntPtr nativeProperty, MarshallingDelegates<T>.ToNative toNative, MarshallingDelegates<T>.FromNative fromNative)
     {
+        _nativeProperty = nativeProperty;
+        _innerTypeFromNative = fromNative;
+        _innerTypeToNative = toNative;
     }
 
-    public T this[int index] => Get(index);
-}
-
-public class UnrealArrayReadWrite<T> : UnrealArrayBase<T>, IList<T>
-{
-    [CLSCompliant(false)]
-    public UnrealArrayReadWrite(UnrealSharpObject baseSharpObject, IntPtr nativeUnrealProperty, IntPtr nativeBuffer, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative)
-        : base(baseSharpObject, nativeUnrealProperty, nativeBuffer, toNative, fromNative)
-    {
-    }
-    
-    public T this[int index]
-    {
-        get 
-        {
-            if (index < 0 || index >= Count)
-            {
-                throw new IndexOutOfRangeException($"Index {index} is out of bounds. Array size is {Count}.");
-            }
-            return Get(index);
-        }
-        set
-        {
-            if (index < 0 || index >= Count)
-            {
-                throw new IndexOutOfRangeException($"Index {index} is out of bounds. Array size is {Count}.");
-            }
-            ToNative(NativeArrayBuffer, index, OwnerSharpObject, value);
-        }
-    }
-
-    public void Add(T item)
-    {
-        int newIndex = Count;
-        AddInternal();
-        this[newIndex] = item;
-    }
-
-    public void Clear()
-    {
-        ClearInternal();
-    }
-
-    public void CopyTo(T[] array, int arrayIndex)
-    {
-        int numElements = Count;
-        for (int i = 0; i < numElements; ++i)
-        {
-            array[i + arrayIndex] = this[i];
-        }
-    }
-
-    public bool IsReadOnly => false;
-
-    public bool Remove(T item)
-    {
-        int index = IndexOf(item);
-        if (index != -1)
-        {
-            RemoveAt(index);
-        }
-        return index != -1;
-    }
-
-    public int IndexOf(T item)
-    {
-        int numElements = Count;
-        for (int i = 0; i < numElements; ++i)
-        {
-            if (this[i].Equals(item))
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    public void Insert(int index, T item)
-    {
-        InsertInternal(index);
-        this[index] = item;
-    }
-
-    public void RemoveAt(int index)
-    {
-        RemoveAtInternal(index);
-    }
-}
-
-public class UnrealArrayReadWriteMarshaller<T>(int length, IntPtr nativeProperty, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative)
-{
-    readonly UnrealArrayReadWrite<T>[] _wrappers = new UnrealArrayReadWrite<T> [length];
-
-    public void ToNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner, UnrealArrayReadWrite<T> obj)
-    {
-        throw new NotImplementedException("Copying UnrealArrays from managed memory to native memory is unsupported.");
-    }
-
-    public UnrealArrayReadWrite<T> FromNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner)
-    {
-        if (_wrappers[arrayIndex] == null)
-        {
-            _wrappers[arrayIndex] = new UnrealArrayReadWrite<T>(owner, nativeProperty, nativeBuffer + arrayIndex * Marshal.SizeOf(typeof(UnmanagedArray)), toNative, fromNative);
-        }
-        return _wrappers[arrayIndex];
-    }
-}
-
-public class UnrealArrayReadOnlyMarshaller<T>
-{
-    IntPtr NativeProperty;
-    UnrealArrayReadOnly<T>[] Wrappers;
-    MarshalingDelegates<T>.FromNative InnerTypeFromNative;
-
-    public UnrealArrayReadOnlyMarshaller(int length, IntPtr nativeProperty, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative)
-    {
-        NativeProperty = nativeProperty;
-        Wrappers = new UnrealArrayReadOnly<T>[length];
-        InnerTypeFromNative = fromNative;
-    }
-
-    public void ToNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner, UnrealArrayReadOnly<T> obj)
-    {
-        throw new NotImplementedException("Copying UnrealArrays from managed memory to native memory is unsupported.");
-    }
-
-    public UnrealArrayReadOnly<T> FromNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner)
-    {
-        if (Wrappers[arrayIndex] == null)
-        {
-            Wrappers[arrayIndex] = new UnrealArrayReadOnly<T>(owner, NativeProperty, nativeBuffer + arrayIndex * Marshal.SizeOf(typeof(UnmanagedArray)), null, InnerTypeFromNative);
-        }
-        return Wrappers[arrayIndex];
-    }
-}
-
-public class UnrealArrayCopyMarshaller<T>
-{
-    int ElementSize;
-    MarshalingDelegates<T>.ToNative InnerTypeToNative;
-    MarshalingDelegates<T>.FromNative InnerTypeFromNative;
-
-    public UnrealArrayCopyMarshaller(int length, MarshalingDelegates<T>.ToNative toNative, MarshalingDelegates<T>.FromNative fromNative, int elementSize)
-    {
-        ElementSize = elementSize;
-        InnerTypeFromNative = fromNative;
-        InnerTypeToNative = toNative;
-    }
-
-    public void ToNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner, IList<T> obj)
+    public void ToNative(IntPtr nativeBuffer, int arrayIndex, IEnumerable<T> obj)
     {
         unsafe
         {
             UnmanagedArray* mirror = (UnmanagedArray*)(nativeBuffer + arrayIndex * Marshal.SizeOf(typeof(UnmanagedArray)));
-            mirror->ArrayNum = obj.Count;
-            mirror->ArrayMax = obj.Count;
-            mirror->Data = Marshal.AllocCoTaskMem(obj.Count * ElementSize);
-
-            for (int i = 0; i < obj.Count; ++i)
+            if (obj == null)
             {
-                InnerTypeToNative(mirror->Data, i, owner, obj[i]);
+                Bind_FArrayProperty.CallEmptyArray(_nativeProperty, mirror);
+                return;
+            }
+
+            var enumerable = obj.ToList();
+            int count = enumerable.Count;
+            
+            Bind_FArrayProperty.CallInitializeArray(_nativeProperty, mirror, count);
+            
+            for (int i = 0; i < count; ++i)
+            {
+                _innerTypeToNative(mirror->Data, i, enumerable.ElementAt(i));
             }
         }
     }
 
-    public void ToNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner, IReadOnlyList<T> obj)
+    public List<T> FromNative(IntPtr nativeBuffer, int arrayIndex)
+    {
+        unsafe
+        {
+            List<T> result = [];
+            UnmanagedArray* array = (UnmanagedArray*)nativeBuffer;
+            for (int i = 0; i < array->ArrayNum; ++i)
+            {
+                result.Add(_innerTypeFromNative(array->Data, i));
+            }
+            return result;
+        }
+    }
+
+    public void DestructInstance(IntPtr nativeBuffer, int arrayIndex)
     {
         unsafe
         {
             UnmanagedArray* mirror = (UnmanagedArray*)(nativeBuffer + arrayIndex * Marshal.SizeOf(typeof(UnmanagedArray)));
-            mirror->ArrayNum = obj.Count;
-            mirror->ArrayMax = obj.Count;
-            mirror->Data = Marshal.AllocCoTaskMem(obj.Count * ElementSize);
-
-            for (int i = 0; i < obj.Count; ++i)
-            {
-                InnerTypeToNative(mirror->Data, i, owner, obj[i]);
-            }
+            Bind_FArrayProperty.CallEmptyArray(_nativeProperty, mirror);
         }
-    }
-
-    public IList<T> FromNative(IntPtr nativeBuffer, int arrayIndex, UnrealSharpObject owner)
-    {
-        List<T> result = new List<T>();
-        unsafe
-        {
-            UnmanagedArray* Array = (UnmanagedArray*)nativeBuffer;
-            for (int i = 0; i < Array->ArrayNum; ++i)
-            {
-                result.Add(InnerTypeFromNative(Array->Data, i, owner));
-            }
-        }
-
-        return result;
-    }
-
-    public static void DestructInstance (IntPtr nativeBuffer, int arrayIndex)
-    {
-        // Not currently used
-        // unsafe
-        // {
-        //     UnmanagedArray* mirror = (UnmanagedArray*) (nativeBuffer + arrayIndex * sizeof(UnmanagedArray));
-        //     Marshal.FreeCoTaskMem(mirror->Data);
-        //     mirror->Data = IntPtr.Zero;
-        //     mirror->ArrayMax = 0;
-        //     mirror->ArrayNum = 0;
-        // }
     }
 }

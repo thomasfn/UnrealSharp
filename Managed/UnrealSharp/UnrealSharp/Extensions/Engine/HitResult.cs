@@ -1,6 +1,9 @@
 namespace UnrealSharp.Engine;
 
-public partial struct HitResult
+public partial record struct FHitResult
 {
-    public Actor Actor => HitObjectHandle.Actor;
+    /// <summary>
+    /// The hit Actor.
+    /// </summary>
+    public AActor? Actor => BlockingHit ? Component.Object!.Owner : null;
 }

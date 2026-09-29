@@ -1,16 +1,31 @@
-﻿using System.Runtime.InteropServices;
-using UnrealSharp.Engine;
+﻿using UnrealSharp.CoreUObject;
 using UnrealSharp.Interop;
 
 namespace UnrealSharp.EnhancedInput;
 
-public partial class EnhancedInputComponent
+public partial class UEnhancedInputComponent
 {
-    public void BindAction(InputAction action, ETriggerEvent triggerEvent, Action<InputActionValue> callback)
+    public bool BindAction(UInputAction action, ETriggerEvent triggerEvent, Action<FInputActionValue, float, float, UInputAction> callback, out uint handle)
     {
-        if (callback.Target is CoreUObject.Object unrealObject)
+        if (callback.Target is not UObject unrealObject)
         {
-            UEnhancedInputComponentExporter.CallBindAction(NativeObject, action.NativeObject, triggerEvent, unrealObject.NativeObject, callback.Method.Name);
+            throw new ArgumentException("The callback must be a method within a UObject class.", nameof(callback));
         }
+        unsafe
+        {
+            fixed (uint* handlePtr = &handle)
+            {
+                return Bind_UEnhancedInputComponent.CallBindAction(NativeObject, action.NativeObject, triggerEvent, unrealObject.NativeObject, callback.Method.Name, (IntPtr) handlePtr);
+            }
+        }
+    }
+
+    public bool BindAction(UInputAction action, ETriggerEvent triggerEvent,
+        Action<FInputActionValue, float, float, UInputAction> callback) =>
+        BindAction(action, triggerEvent, callback, out var dummy);
+
+    public bool RemoveBinding(uint handle)
+    {
+        return Bind_UEnhancedInputComponent.CallRemoveBindingByHandle(NativeObject, handle);
     }
 }

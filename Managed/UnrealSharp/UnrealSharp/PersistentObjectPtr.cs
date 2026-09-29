@@ -1,83 +1,84 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
+using UnrealSharp.Core;
+using UnrealSharp.CoreUObject;
 using UnrealSharp.Interop;
 
 namespace UnrealSharp;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PersistentObjectPtrData
+public struct FPersistentObjectPtrData<ObjectId> where ObjectId : struct
 { 
-    public readonly bool Equals(PersistentObjectPtrData other)
-    {
-        return Equals(_weakPtr, other._weakPtr) && Equals(_objectId, other._objectId);
-    }
-    
     public WeakObjectData _weakPtr;
-    public SoftObjectPath _objectId;
+    public ObjectId _objectId;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public struct PersistentObjectPtr
+public struct FSoftObjectPathUnsafe
 {
-    public bool Equals(PersistentObjectPtr other)
-    {
-        return PersistentObjectPtrData.Equals(other.PersistentObjectPtrData);
-    }
-    public override bool Equals(object obj)
-    {
-        if (ReferenceEquals(null, obj)) return false;
-        return obj.GetType() == GetType() && Equals((PersistentObjectPtr)obj);
-    }
-    public override int GetHashCode()
-    {
-        return PersistentObjectPtrData.GetHashCode();
-    }
+    public FTopLevelAssetPath AssetPath;
+    public UnmanagedArray SubPathString;
+}
 
-    public PersistentObjectPtr(CoreUObject.Object obj)
+[StructLayout(LayoutKind.Sequential)]
+public struct FPersistentObjectPtr : IEquatable<FPersistentObjectPtr>
+{
+    internal FPersistentObjectPtrData<FSoftObjectPathUnsafe> Data;
+    
+    public FPersistentObjectPtr(UObject obj)
     {
-        if (obj == null)
+        if (!obj.IsValid())
         {
             return;
         }
-        
-        TPersistentObjectPtrExporter.CallFromObject(ref PersistentObjectPtrData, obj.NativeObject);
+
+        Bind_TPersistentObjectPtr.CallFromObject(ref Data, obj.NativeObject);
     }
     
-    public PersistentObjectPtr(IntPtr native)
+    internal FPersistentObjectPtr(FPersistentObjectPtrData<FSoftObjectPathUnsafe> nativeBuffer)
     {
-        unsafe
+        Data = nativeBuffer;
+    }
+    
+    public FSoftObjectPath GetUniqueId()
+    {
+        IntPtr uniqueId = Bind_TPersistentObjectPtr.CallGetUniqueID(ref Data);
+        return FSoftObjectPathMarshaller.FromNative(uniqueId, 0);
+    }
+    
+    public UObject? Get()
+    {
+        IntPtr handle = Bind_TPersistentObjectPtr.CallGet(ref Data);
+        return GCHandleUtilities.GetObjectFromHandlePtr<UObject>(handle);
+    }
+    
+    public override bool Equals(object? obj)
+    {
+        if (obj is not FPersistentObjectPtr other)
         {
-            PersistentObjectPtrData = *(PersistentObjectPtrData*) native.ToPointer(); 
+            return false;
         }
+
+        return Bind_TPersistentObjectPtr.CallEquals(ref Data, ref other.Data).ToManagedBool();
     }
 
-    public PersistentObjectPtr()
+    public bool Equals(FPersistentObjectPtr other)
     {
-        
+        return Equals((object)other);
     }
     
-    internal PersistentObjectPtr(PersistentObjectPtrData data)
+    public override int GetHashCode()
     {
-        PersistentObjectPtrData = data;
-    }
-    
-    public static bool operator == (PersistentObjectPtr a, PersistentObjectPtr b)
-    {
-        return a.Equals(b);
-    }
-    public static bool operator !=(PersistentObjectPtr a, PersistentObjectPtr b)
-    {
-        return !(a == b);
-    }
-    public SoftObjectPath GetUniqueId()
-    {
-        return PersistentObjectPtrData._objectId;
-    }
-    
-    public CoreUObject.Object Get()
-    {
-        IntPtr handle = TPersistentObjectPtrExporter.CallGet(ref PersistentObjectPtrData);
-        return GcHandleUtilities.GetObjectFromHandlePtr<CoreUObject.Object>(handle);
+        return Bind_TPersistentObjectPtr.CallGetHashCode(ref Data);
     }
 
-    internal PersistentObjectPtrData PersistentObjectPtrData;
+    public static bool operator ==(FPersistentObjectPtr left, FPersistentObjectPtr right)
+    {
+        return left.Equals(right);
+    }
+
+    public static bool operator !=(FPersistentObjectPtr left, FPersistentObjectPtr right)
+    {
+        return !(left == right);
+    }
 }

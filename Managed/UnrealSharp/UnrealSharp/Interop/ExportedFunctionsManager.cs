@@ -1,74 +1,66 @@
-using System.Diagnostics;
-using System.Reflection;
+﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using UnrealSharp.Binds;
 
 namespace UnrealSharp.Interop;
 
 public static class ExportedFunctionsManager
 {
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] 
-    delegate void NativeFunctionDelegate(IntPtr nativeFunctionPtr);
-    
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    unsafe delegate void RegisterFunctionsCallback(IntPtr nativeFunctionPtr, char* nativeFunctionName);
-    
     private static readonly Dictionary<string, FieldInfo> UnmanagedDelegates = new();
 
-    public static void Initialize(IntPtr NativeExportFunctionsPtr)
+    public static unsafe void Initialize(IntPtr nativeExportFunctionsPtr)
     {
         try
         {
-            unsafe
+            Type[] types = Assembly.GetExecutingAssembly().GetTypes();
+            foreach (Type type in types)
             {
-                foreach (Type type in Assembly.GetExecutingAssembly().GetTypes())
+                if (!Attribute.IsDefined(type, typeof(NativeCallbacksAttribute)))
                 {
-                    if (!Attribute.IsDefined(type, typeof(NativeCallbacksAttribute)))
+                    continue;
+                }
+
+                foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic |
+                                                           BindingFlags.Static))
+                {
+                    if (!field.IsStatic || !field.FieldType.IsUnmanagedFunctionPointer)
                     {
                         continue;
                     }
-
-                    foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.NonPublic |
-                                                               BindingFlags.Static))
-                    {
-                        if (!field.IsStatic || !field.FieldType.IsUnmanagedFunctionPointer)
-                        {
-                            continue;
-                        }
                         
-                        UnmanagedDelegates.TryAdd(type.Name + "." + field.Name, field);
-                    }
+                    UnmanagedDelegates.TryAdd(type.Name + "." + field.Name, field);
                 }
+            }
 
             
-                NativeFunctionDelegate registerFunctions =
-                    Marshal.GetDelegateForFunctionPointer<NativeFunctionDelegate>(NativeExportFunctionsPtr);
-                IntPtr registerFunctionsCallback =
-                    Marshal.GetFunctionPointerForDelegate<RegisterFunctionsCallback>(RegisterFunctions);
+            delegate* unmanaged[Cdecl]<IntPtr, void> registerFunctions = (delegate* unmanaged[Cdecl]<IntPtr, void>)nativeExportFunctionsPtr;
+            IntPtr registerFunctionsCallback = (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, char*, void>)&RegisterFunctions;
 
-                registerFunctions(registerFunctionsCallback);
+            registerFunctions(registerFunctionsCallback);
                 
-                foreach (KeyValuePair<string, FieldInfo> unmanagedDelegate in UnmanagedDelegates)
+            foreach (KeyValuePair<string, FieldInfo> unmanagedDelegate in UnmanagedDelegates)
+            {
+                if (unmanagedDelegate.Value.GetValue(null) == null)
                 {
-                    if (unmanagedDelegate.Value.GetValue(null) == null)
-                    {
-                        Console.WriteLine($"Failed to initialize {unmanagedDelegate.Key}.");
-                    }
+                    LogUnrealSharp.LogWarning($"Failed to initialize {unmanagedDelegate.Key}.");
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to initialize native functions: {ex}");
+            LogUnrealSharp.LogError($"Failed to initialize native functions: {ex}");
         }
     }
 
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static unsafe void RegisterFunctions(IntPtr nativeFunctionPtr, char* nativeFunctionName)
     {
         string nativeFunctionNameString = new string(nativeFunctionName);
         
         try
         {
-            if (!UnmanagedDelegates.TryGetValue(nativeFunctionNameString, out FieldInfo unmanagedDelegate))
+            if (!UnmanagedDelegates.TryGetValue(nativeFunctionNameString, out FieldInfo? unmanagedDelegate))
             {
                 throw new Exception($"Failed to find {nativeFunctionNameString} in {nameof(UnmanagedDelegates)}.");
             }
@@ -77,7 +69,7 @@ public static class ExportedFunctionsManager
         }
         catch (Exception e)
         {
-            Console.WriteLine($"Failed to register native function \"{nativeFunctionNameString}\" exception: {e}");
+            LogUnrealSharp.Log($"Failed to register native function \"{nativeFunctionNameString}\" exception: {e}");
         }
     }
 }

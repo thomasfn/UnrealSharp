@@ -1,78 +1,86 @@
 ﻿using System.Runtime.InteropServices;
+using UnrealSharp.Core;
+using UnrealSharp.Core.Attributes;
+using UnrealSharp.CoreUObject;
 using UnrealSharp.Interop;
 
 namespace UnrealSharp;
 
 [StructLayout(LayoutKind.Sequential)]
-public struct WeakObjectData
+public record struct WeakObjectData
 {
     public int ObjectIndex;
     public int ObjectSerialNumber;
 }
 
-public struct WeakObject<T> : IEquatable<WeakObject<T>> where T : UnrealSharpObject
+/// <summary>
+/// A weak reference to an Unreal Engine UObject.
+/// </summary>
+/// <typeparam name="T">The type of object that this weak object points to.</typeparam>
+public readonly record struct TWeakObjectPtr<T> where T : UObject
 {
-    internal readonly WeakObjectData _data;
-    public T Object => Get();
+    internal readonly WeakObjectData Data;
     
-    public WeakObject(T obj)
+    /// <summary>
+    /// Get the object that this weak object points to.
+    /// </summary>
+    public T? Object => Get();
+    
+    public TWeakObjectPtr(T obj)
     { 
-        FWeakObjectPtrExporter.CallSetObject(ref _data, obj?.NativeObject ?? IntPtr.Zero);
-    }
-    
-    internal WeakObject(WeakObjectData data)
-    {
-        _data = data;
-    }
-    
-    internal WeakObject(CoreUObject.Object targetObject)
-    {
-        FWeakObjectPtrExporter.CallSetObject(ref _data, targetObject.NativeObject);
-    }
-    
-    public static implicit operator WeakObject<T>(T obj)
-    {
-        return new WeakObject<T>(obj);
+        Bind_FWeakObjectPtr.CallSetObject(ref Data, obj?.NativeObject ?? IntPtr.Zero);
     }
 
-    private T Get()
+    internal TWeakObjectPtr(IntPtr nativePtr)
     {
-        IntPtr handle = FWeakObjectPtrExporter.CallGetObject(_data);
-        return GcHandleUtilities.GetObjectFromHandlePtr<T>(handle);
+        Bind_FWeakObjectPtr.CallSetObject(ref Data, nativePtr);
+    }
+    
+    internal TWeakObjectPtr(WeakObjectData data)
+    {
+        Data = data;
+    }
+    
+    internal TWeakObjectPtr(UObject targetObject)
+    {
+        Bind_FWeakObjectPtr.CallSetObject(ref Data, targetObject.NativeObject);
+    }
+    
+    public static implicit operator TWeakObjectPtr<T>(T obj)
+    {
+        return new TWeakObjectPtr<T>(obj);
+    }
+    
+    private T? Get()
+    {
+        IntPtr handle = Bind_FWeakObjectPtr.CallGetObject(Data);
+        return GCHandleUtilities.GetObjectFromHandlePtr<T>(handle);
     }
 
-    public bool IsValid()
-    {
-        return FWeakObjectPtrExporter.CallIsValid(_data).ToManagedBool();
-    }
+    /// <summary>
+    /// Check if the object that this weak object points to is valid.
+    /// </summary>
+    /// <returns>True if the object is valid, false otherwise.</returns>
+    public bool IsValid => Bind_FWeakObjectPtr.CallIsValid(Data).ToManagedBool();
 
+    /// <summary>
+    /// Check if the object that this weak object points to is stale.
+    /// </summary>
+    /// <returns>True if the object is stale, false otherwise.</returns>
     public bool IsStale()
     {
-        return FWeakObjectPtrExporter.CallIsStale(_data).ToManagedBool();
+        return Bind_FWeakObjectPtr.CallIsStale(Data).ToManagedBool();
     }
-    
+
+    /// <inheritdoc />
     public override string ToString()
     {
-        return IsValid() ? Object.ToString() : "None";
+        return IsValid ? Object!.ToString() : "None";
     }
 
+    /// <inheritdoc />
     public override int GetHashCode()
     {
-        return _data.ObjectIndex;
-    }
-
-    public override bool Equals(object obj)
-    {
-        if (obj is WeakObject<T> other)
-        {
-            return Equals(other);
-        }
-
-        return false;
-    }
-
-    public bool Equals(WeakObject<T> other)
-    {
-        return FWeakObjectPtrExporter.CallNativeEquals(_data, other._data).ToManagedBool();
+        return Data.ObjectIndex;
     }
 }

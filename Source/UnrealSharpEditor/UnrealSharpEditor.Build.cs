@@ -10,6 +10,8 @@ public class UnrealSharpEditor : ModuleRules
             new string[]
             {
                 "Core",
+                "UnrealSharpBinds", 
+                "UnrealSharpCore"
             }
         );
 
@@ -20,11 +22,33 @@ public class UnrealSharpEditor : ModuleRules
                 "Engine",
                 "Slate",
                 "SlateCore",
-                "EditorSubsystem", 
-                "CSharpForUE",
-                "UnrealEd", 
-                "UnrealSharpProcHelper"
+                "EditorSubsystem",
+                "UnrealEd",
+                "UnrealSharpUtilities",
+                "BlueprintGraph",
+                "ToolMenus",
+                "EditorFramework",
+                "InputCore",
+                "AppFramework",
+                "EditorStyle",
+                "Projects",
+                "GameplayTags",
+                "DeveloperSettings",
+                "UnrealSharpAsyncBlueprint",
+                "Kismet",
+                "KismetCompiler",
+                "BlueprintEditorLibrary",
+                "SubobjectDataInterface",
+                "AssetTools",
+                "PluginBrowser", 
+                "UnrealSharpUtilities", 
+                "PlacementMode",
+                "DeveloperToolSettings",
+                "UMG",
+                "ToolWidgets"
             }
         );
+
+        PublicDefinitions.Add("ForceAsEngineGlue=1");
     }
 }
